@@ -316,3 +316,6 @@ decompressed = zlib.decompress(data)
 ## Заключение
 
 Анализ PDF-документов не так труден, когда вы понимается основные структуры PDF-документа. Поиск ключевых символов JavaScript, эксплуатирующего уязвимости, достаточно труден. Поэтому используйте автоматические инструменты.
+
+> Источник: https://vulscan.googlecode.com/files/%5BHackin9%5D%20Anatomy%20of%20Malicious%20PDF%20Documents.pdf
+> Переведено: 18.09.2015 (by effus)
