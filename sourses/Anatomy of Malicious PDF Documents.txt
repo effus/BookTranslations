@@ -1,2 +1,106 @@
 === Anatomy of Malicious PDF Documents ===
 https://vulscan.googlecode.com/files/%5BHackin9%5D%20Anatomy%20of%20Malicious%20PDF%20Documents.pdf
+
+
+This article will teach you how to analyze a particular class of malicious PDF files: those exploiting a vulnerability in the embedded JavaScript interpreter. But what you learn here will also help you analyze other classes of malicious PDF files, for example when a vulnerability in the PDF parser is exploited. Although almost all malicious PDF documents target the Windows OS, everything explained here about the PDF language is OS-neutral and applies as well to PDF documents rendered on Windows, Linux and OSX.
+
+
+Let’s start by handcrafting the most basic PDF document rendering one page with the text Hello World. Although you'll never find such a simple document in the wild, it's very suited for our needs: explaining the internals of a PDF document. It contains only the essential elements necessary to render a page, and is formatted to be very readable. One of its characteristics is that it contains only ASCII characters, making it readable with the simplest editor, like Notepad. Another characteristic is that a lot of (superfluous) whitespace and indentation has been added to make the PDF structure stand out. Finally, the content has not been compressed.
+
+Every PDF document must start with a single line, the magic number, identifying it as a PDF document. It also specifies the version of the
+PDF language specification used to describe the document:
+%PDF-1.1
+Every line starting with a %-sign in a PDF document is a comment line and its content is ignored, with 2 exceptions:
+beginning a document: %PDF-X.Y
+ending a document: %%EOF
+
+After our first line, we start to add objects (made up of basic elements of the PDF language) to our document. The order in which these objects appear in the file has no influence on the layout of the rendered pages. But for clarity, we'll introduce the objects in a logical order. One important remark: the PDF language is casesensitive. Our first object is a catalog. It tells the PDF rendering application (e.g. Adobe Acrobat Reader) where to start looking for the objects making up the document:
+
+1 0 obj
+<<
+ /Type /Catalog
+ /Outlines 2 0 R
+ /Pages 3 0 R
+ >>
+endobj
+
+This is actually an indirect object, because it has a number and can thus be referenced. The syntax is simple: a number, a version number, the word obj, the object itself, and finally, the word endobj: 
+1 0 obj
+ object
+endobj
+The combination of object number and version allows us to uniquely reference an object. The type of our first object, the catalog, is a dictionary. Dictionaries are very common in PDF documents. They start with the
+<<-sign and end with the
+>>-sign:
+
+The members of a dictionary are composed of a key and a value. A dictionary can contain elements, objects and other dictionaries. Most dictionaries announce their type with the name /Type (the key) followed by a name with the type itself the value, /Catalog in our case:
+
+2 0 R and 3 0 R are references to indirect objects 2 and 3. Indirect object 2 describes the outline, indirect object 3 describes the pages.
+
+So let's add our second indirect object to our PDF document:
+
+2 0 obj
+<<
+ /Type /Outlines
+ /Count 0
+>>
+endobj
+
+With the explanations you got from indirect object 1, you should be able to understand the syntax of this object. This object is a dictionary of type /Outlines. It has a /Count of 0, meaning that there is no outline for this PDF document. This object can be referenced with its number and version: 2 and 0.
+
+The fact that the outline object is only one line long now has no influence on the semantics, this is just done for readability.
+
+But let's leave this side note and continue assembling our PDF document. After the catalog and outlines object, we must define our pages.
+
+This should be straightforward now, except maybe for the /Kids element. The kids element is a list of pages; a list is delimited by square-brackets. So according to this Pages object, we have only one page in our document, indirect object 4 (notice the reference 4 0 R):
+
+
+The content of this stream is a set of PDF text rendering instructions. These instructions are delimited by BT and ET, essentially instructing the renderer to do the following:
+
+Strings in the PDF language are enclosed by parentheses
+
+These are all the objects we need to render a page. But this is not enough yet for our rendering application (e.g. Adobe Acrobat Reader) to read and display our PDF document. The renderer needs to know which object starts the document description the (root object) and it also needs some technical details like an index of each object
+
+The first number after xref is the number of the first indirect object (legacy object 0 here), the second number is the size of the xref table (7 entries)
+
+The first column is the absolute position of the indirect object. The value 12 on the second line tells use that indirect object 1 starts 12 bytes into the file. The second column is the version and third column indicates if the object is in use (n) or free (f).
+
+After the cross reference, we specify the root object in the trailer:
+
+Finally, we need to terminate the PDF document with the absolute position of the xref element and the magic number
+
+
+Once we understand the basic syntax and semantics of the PDF language, it's not so difficult to make a basic PDF document. 
+
+Calculating the correct byte-offsets of the indirect objects can be tedious, but there are Python programs on my blog to help you with this, and furthermore, many PDF readers can deal with erroneousindexes
+
+
+Because we want to analyze malicious PDF documents with a JavaScript payload, we need to understand how we can add JavaScript and get it to execute.
+
+
+The PDF language supports the association of actions with events. For example, when a particular page is viewed, an associated action can be performed (e.g. visiting a website).
+
+One of the actions of interest to us is executed when opening a PDF document. Adding an /OpenAction key to the catalog object allows us to execute an action upon opening of our PDF document, without further user interaction.
+
+The action to be executed when opening our PDF document is specified in indirect object 7. We could specify an URI action. An URI action automatically opens an URI: 
+in our case, an URL:
+
+ 
+ Most PDF readers will launch the Internet browser and navigate to the URL. Since version 7, Adobe Acrobat will first ask the user authorization to launch the browser
+ 
+ The PDF language supports embedded JavaScript. However, this JavaScript engine is very limited in its interactions with the underlying OS, and is practically unusable for malicious purposes. For example, JavaScript embedded in a PDF document cannot access arbitrary files. 
+ 
+var num = 12999999999999999999888888
+.....
+util.printf(„%45000f”,num)
+
+When this JavaScript is embedded in a PDF document to be executed upon opening (with Adobe Acrobat Reader 8.1.2 on Windows XP SP2), it will generate an Access Violation trying to execute code at address 0x30303030. So this means that through some buffer overflow, executing the PoC will pass execution to address 0x30303030 (0x30 is the hexadecimal representation of ASCII character 0). So to exploit this vulnerability, we need to write our program (shellcode) we want to get executed starting at address 0x30303030.
+
+
+The problem with embedded JavaScript is that we cannot write directly to memory. Heap spraying is an often used work-around. Each time we declare and assign a string in JavaScript, a piece of memory is used to write this string to. This piece is taken from a part of the memory reserved for this purpose, called the heap. We have no influence over which particular piece of memory is used, so we cannot instruct JavaScript to use memory at address 0x30303030. But if we assign a very large number of strings, the chance increases that ultimately, one string is assigned to a piece of memory including address 0x30303030. Assigning this large number of strings is called heap spraying.
+
+
+ But if we assign a very large number of strings, the chance increases that ultimately, one string is assigned to a piece of memory including address 0x30303030
+ 
+ 
+ So how do we make that our particular string contains the correct statements to exploit the machine starting at address 0x30303030? Again, it's not possible to do this directly; we need a work-around. 
+ Если мы создаим строку, которая может быть интерпретирована как машинный код, процессор обратится к ней по адресу 0x30303030. Но это не круто, наша программа должна начать выполнятся с её первой инструкции, а не откуда-то из середины. Для решения этой проблемы мы предварим первую инструкцию нашей программы очень длинным NOP-sled (однобайтовой инструкцией). Мы сохраним эту инструкцию в строке, которую используем в heap-spray. Однобайтовая инструкция NOP не выполняет никаких действий (NOP = No Operations), таким образом процессор будет выполнять большое количество NOP-инструкций, пока не дойдет до основного кода и не выполнит его.
